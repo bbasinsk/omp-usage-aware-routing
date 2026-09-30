@@ -1,0 +1,19 @@
+{
+  "name": "omp-usage-aware-routing",
+  "version": "1.0.0",
+  "description": "Balance OMP subagent task suitability with live subscription quota pressure.",
+  "type": "module",
+  "author": "bbasinsk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bbasinsk/omp-usage-aware-routing.git"
+  },
+  "keywords": ["omp-plugin", "omp", "subagents", "quota", "routing"],
+  "files": ["extensions", "readme.md"],
+  "scripts": {
+    "test": "bun test extension-tests/usage-aware-routing.test.ts"
+  },
+  "omp": {
+    "extensions": ["./extensions/usage-aware-routing.ts"]
+  }
+}
