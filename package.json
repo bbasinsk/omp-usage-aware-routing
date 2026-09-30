@@ -1,6 +1,6 @@
 {
   "name": "omp-usage-aware-routing",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Balance OMP subagent task suitability with live subscription quota pressure.",
   "type": "module",
   "author": "bbasinsk",

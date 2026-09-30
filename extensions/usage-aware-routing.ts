@@ -354,6 +354,24 @@ type AgentQuota = QuotaScope & {
   agent: string;
 };
 
+export function selectAgentRoutes(
+  agents: unknown[],
+  disabledAgents: readonly string[],
+  isReadOnlyAgent: (agent: unknown) => boolean,
+): AgentRoute[] {
+  const routes: AgentRoute[] = [];
+  for (const value of agents) {
+    if (!value || typeof value !== "object" || isReadOnlyAgent(value)) continue;
+    const agent = value as Record<string, unknown>;
+    if (typeof agent.name !== "string" || disabledAgents.includes(agent.name)) continue;
+    const selectors = Array.isArray(agent.model)
+      ? agent.model.filter((selector): selector is string => typeof selector === "string")
+      : [];
+    routes.push({ name: agent.name, modelSelectors: selectors.length ? selectors : ["@task"] });
+  }
+  return routes;
+}
+
 async function discoverAgentRoutes(cwd: string, logger: PiApi["logger"]): Promise<AgentRoute[]> {
   try {
     // Runtime-only import: the standalone OMP binary provides this module to
@@ -364,22 +382,17 @@ async function discoverAgentRoutes(cwd: string, logger: PiApi["logger"]): Promis
     if (typeof taskModule.discoverAgents !== "function" || typeof taskModule.isReadOnlyAgent !== "function") return [];
     const discoverAgents = taskModule.discoverAgents as (cwd: string) => Promise<unknown>;
     const isReadOnlyAgent = taskModule.isReadOnlyAgent as (agent: unknown) => boolean;
+    const { findScopedSettings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
+    const { cfgTaskDisabledAgents } = await import("@oh-my-pi/pi-coding-agent/task/settings");
+    const settings = findScopedSettings(cwd);
+    if (!settings) throw new Error("Active session settings unavailable");
+    const disabledAgents = cfgTaskDisabledAgents.get(settings);
     const discovered: unknown = await discoverAgents(cwd);
     if (!discovered || typeof discovered !== "object" || !(("agents" in discovered))) return [];
     const agents = discovered.agents;
     if (!Array.isArray(agents)) return [];
 
-    const routes: AgentRoute[] = [];
-    for (const value of agents) {
-      if (!value || typeof value !== "object" || isReadOnlyAgent(value)) continue;
-      const agent = value as Record<string, unknown>;
-      if (typeof agent.name !== "string") continue;
-      const selectors = Array.isArray(agent.model)
-        ? agent.model.filter((selector): selector is string => typeof selector === "string")
-        : [];
-      routes.push({ name: agent.name, modelSelectors: selectors.length ? selectors : ["@task"] });
-    }
-    return routes;
+    return selectAgentRoutes(agents, disabledAgents, isReadOnlyAgent);
   } catch (error) {
     logger?.warn("usage-aware routing agent discovery failed", {
       error: error instanceof Error ? error.message : String(error),

@@ -23,7 +23,7 @@ Balanced routing weighs task suitability and quota pressure together. It does no
 For a reproducible installation, pin the release tag:
 
 ```sh
-omp plugin install 'github:bbasinsk/omp-usage-aware-routing#v1.0.0'
+omp plugin install 'github:bbasinsk/omp-usage-aware-routing#v1.0.1'
 ```
 
 Git installations use OMP's user plugin directory. They do not support project scope.
@@ -89,6 +89,9 @@ If refresh fails, it keeps the previous snapshot. Without a snapshot, it adds no
 
 Prompt context includes remaining quota, reset times, usage pace, saved reset credits, and resolved agent quota rankings.
 Pace compares remaining quota with the fraction of the quota window still remaining.
+
+Agent rankings and targeted alternatives exclude agents listed in `task.disabledAgents`.
+The extension reads effective session settings, including project settings, `--config` overlays, and runtime overrides.
 
 Provider-wide windows apply to every matching model. Model-specific and tier-specific windows also apply to their matching models.
 Codex Chat and Spark meters remain separate.

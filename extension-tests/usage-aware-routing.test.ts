@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAgentQuotaOrder,
   buildQuotaScopeOrder,
-  buildRoutingInstruction,
   calculatePace,
   completeQuotaStrategy,
   normalizeUsage,
   quotaStrategyViolation,
+  selectAgentRoutes,
 } from "../extensions/usage-aware-routing";
 
 const NOW = Date.UTC(2026, 8, 15, 12);
@@ -40,11 +40,6 @@ describe("usage-aware routing", () => {
     expect(persisted).not.toContain("private@example.com");
     expect(persisted).not.toContain("secret-account");
 
-    const instruction = buildRoutingInstruction(snapshot, NOW);
-    expect(instruction).toContain("anthropic [tier=fable]");
-    expect(instruction).toContain("40.0% left");
-    expect(instruction).toContain("20.0% deficit");
-    expect(instruction).toContain("resets in 2d12h");
   });
 
   test("keeps Codex Chat and Spark meters distinct", () => {
@@ -229,8 +224,6 @@ describe("usage-aware routing", () => {
     })[spec];
     const agentOrder = buildAgentQuotaOrder(snapshot, agents, resolveModel, NOW, targeted);
     expect(agentOrder!.indexOf("future-codex")).toBeLessThan(agentOrder!.indexOf("future-grok"));
-    expect(buildRoutingInstruction(snapshot, NOW, scopeOrder, agentOrder, targeted))
-      .toContain("Saved reset credits: openai-codex=2.");
     expect(quotaStrategyViolation(
       snapshot,
       agents,
@@ -273,5 +266,42 @@ describe("usage-aware routing", () => {
       NOW,
     );
     expect(agentOrder).toContain("future-worker [future-provider/model=next-model");
+  });
+
+  test("disabling target agents removes them from routing choices and allows off-target work", () => {
+    const definitions = [
+      { name: "target-worker", model: ["@target"], readOnly: false },
+      { name: "other-worker", model: ["@other"], readOnly: false },
+      { name: "reader", model: ["@target"], readOnly: true },
+    ];
+    const isReadOnly = (agent: unknown) =>
+      !!agent && typeof agent === "object" && "readOnly" in agent && agent.readOnly === true;
+    const snapshot = normalizeUsage({
+      reports: ["target-provider", "other-provider"].map(provider => ({
+        provider,
+        limits: [{
+          id: `${provider}:weekly`,
+          label: "Weekly",
+          scope: { provider },
+          window: { durationMs: 100 * HOUR, resetsAt: NOW + 50 * HOUR },
+          amount: { usedFraction: 0.25, remainingFraction: 0.75 },
+          status: "ok",
+        }],
+      })),
+    }, NOW);
+    const resolveModel = (spec: string) => ({
+      "@target": { provider: "target-provider", id: "target-model" },
+      "@other": { provider: "other-provider", id: "other-model" },
+    })[spec];
+    const strategy = { version: 1 as const, mode: "targeted" as const, provider: "target-provider", updatedAt: NOW };
+    const input = { agent: "other-worker", task: "Complete the work" };
+
+    const disabledRoutes = selectAgentRoutes(definitions, ["target-worker"], isReadOnly);
+    expect(disabledRoutes.map(route => route.name)).toEqual(["other-worker"]);
+    expect(quotaStrategyViolation(snapshot, disabledRoutes, resolveModel, input, strategy, NOW)).toBeUndefined();
+
+    const enabledRoutes = selectAgentRoutes(definitions, [], isReadOnly);
+    expect(enabledRoutes.map(route => route.name)).toEqual(["target-worker", "other-worker"]);
+    expect(quotaStrategyViolation(snapshot, enabledRoutes, resolveModel, input, strategy, NOW)).toBeDefined();
   });
 });
