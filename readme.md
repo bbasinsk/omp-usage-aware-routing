@@ -23,7 +23,7 @@ Balanced routing weighs task suitability and quota pressure together. It does no
 For a reproducible installation, pin the release tag:
 
 ```sh
-omp plugin install 'github:bbasinsk/omp-usage-aware-routing#v1.0.1'
+omp plugin install 'github:bbasinsk/omp-usage-aware-routing#v1.0.2'
 ```
 
 Git installations use OMP's user plugin directory. They do not support project scope.
