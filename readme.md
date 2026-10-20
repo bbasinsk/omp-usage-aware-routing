@@ -47,6 +47,7 @@ Use these commands inside an OMP session:
 ```text
 /quota-strategy
 /quota-strategy balanced
+/quota-strategy quality
 /quota-strategy targeted
 /quota-strategy targeted anthropic
 /quota-strategy targeted openai-codex
@@ -64,6 +65,11 @@ Provider names come from available usage data. The default strategy is `balanced
 
 Quota rankings are advisory. Balanced mode does not reject task calls because of quota pressure.
 It leaves provider availability and exhaustion handling to OMP.
+
+### Quality
+
+Pick the best-fitting model for each task on capability alone. Quota pressure and cost are ignored.
+The prompt omits quota data, the extension skips `omp usage` refreshes, and the task guard is off.
 
 ### Targeted
 

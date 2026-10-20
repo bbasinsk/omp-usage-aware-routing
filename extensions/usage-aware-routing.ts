@@ -56,11 +56,16 @@ type AgentRoute = {
   modelSelectors: string[];
 };
 
-type RoutingStrategy =
+type QuotaStrategy =
   | { version: 1; mode: "balanced"; updatedAt: number }
   | { version: 1; mode: "targeted"; provider: string; updatedAt: number };
 
-const DEFAULT_STRATEGY: RoutingStrategy = { version: 1, mode: "balanced", updatedAt: 0 };
+type RoutingStrategy = QuotaStrategy | { version: 1; mode: "quality"; updatedAt: number };
+
+const DEFAULT_STRATEGY: QuotaStrategy = { version: 1, mode: "balanced", updatedAt: 0 };
+
+const QUALITY_INSTRUCTION = `${ROUTING_HEADER}
+Active strategy: quality. Quota data is intentionally omitted. Pick the best-fitting model for each subagent task on capability alone; ignore quota pressure and cost. Still match model strength to the task: a stronger model is best only when it improves the result.`;
 
 type BeforeAgentStartEvent = {
   systemPrompt: string[];
@@ -91,6 +96,7 @@ type AutocompleteItem = {
 
 const STRATEGY_MODE_COMPLETIONS: readonly AutocompleteItem[] = [
   { value: "balanced", label: "balanced", description: "Balance task suitability with quota pressure" },
+  { value: "quality", label: "quality", description: "Pick the best model for each task, ignoring quota" },
   { value: "targeted", label: "targeted", description: "Prefer one subscription provider" },
 ];
 
@@ -291,7 +297,7 @@ type QuotaScope = {
 function compareQuota(
   left: QuotaScope,
   right: QuotaScope,
-  strategy: RoutingStrategy,
+  strategy: QuotaStrategy,
   resetCredits: Record<string, number>,
 ): number {
   const targeted = (quota: QuotaScope) =>
@@ -307,14 +313,14 @@ function compareQuota(
     || left.scope.localeCompare(right.scope);
 }
 
-function strategyName(strategy: RoutingStrategy): string {
+function strategyName(strategy: QuotaStrategy): string {
   return strategy.mode === "balanced" ? "Balanced" : `Targeted ${strategy.provider}`;
 }
 
 export function buildQuotaScopeOrder(
   snapshot: UsageSnapshot,
   now = Date.now(),
-  strategy: RoutingStrategy = DEFAULT_STRATEGY,
+  strategy: QuotaStrategy = DEFAULT_STRATEGY,
 ): string | undefined {
   const grouped = new Map<string, UsageWindow[]>();
   for (const window of snapshot.windows) {
@@ -455,7 +461,7 @@ export function buildAgentQuotaOrder(
   agents: AgentRoute[],
   resolveModel: (spec: string) => ResolvedModel | undefined,
   now = Date.now(),
-  strategy: RoutingStrategy = DEFAULT_STRATEGY,
+  strategy: QuotaStrategy = DEFAULT_STRATEGY,
 ): string | undefined {
   const candidates = evaluateAgentQuotas(snapshot, agents, resolveModel, now);
 
@@ -501,7 +507,7 @@ export function quotaStrategyViolation(
   strategy: RoutingStrategy,
   now = Date.now(),
 ): string | undefined {
-  if (strategy.mode === "balanced") return undefined;
+  if (strategy.mode !== "targeted") return undefined;
 
   const candidates = evaluateAgentQuotas(snapshot, agents, resolveModel, now);
   const context = typeof input.context === "string" ? input.context : "";
@@ -549,7 +555,7 @@ export function buildRoutingInstruction(
   now = Date.now(),
   quotaScopeOrder?: string,
   agentQuotaOrder?: string,
-  strategy: RoutingStrategy = DEFAULT_STRATEGY,
+  strategy: QuotaStrategy = DEFAULT_STRATEGY,
 ): string {
   const ageMs = Math.max(0, now - snapshot.refreshedAt);
   const stale = ageMs >= REFRESH_MS ? "; stale" : "";
@@ -621,7 +627,7 @@ function isRoutingStrategy(value: unknown): value is RoutingStrategy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   if (candidate.version !== 1 || typeof candidate.updatedAt !== "number" || !Number.isFinite(candidate.updatedAt)) return false;
-  if (candidate.mode === "balanced") return true;
+  if (candidate.mode === "balanced" || candidate.mode === "quality") return true;
   return candidate.mode === "targeted"
     && typeof candidate.provider === "string"
     && candidate.provider.length > 0;
@@ -694,17 +700,17 @@ async function configureStrategy(args: string, ctx: StrategyCommandContext, pi: 
   if (!parts.length) {
     const current = await readStrategy();
     ctx.ui.notify(
-      current.mode === "balanced"
-        ? "Quota strategy: balanced"
-        : `Quota strategy: targeted (${current.provider})`,
+      current.mode === "targeted"
+        ? `Quota strategy: targeted (${current.provider})`
+        : `Quota strategy: ${current.mode}`,
       "info",
     );
     return;
   }
 
-  if (parts[0] === "balanced" && parts.length === 1) {
-    await writeJsonAtomically(STRATEGY_PATH, { version: 1, mode: "balanced", updatedAt: Date.now() });
-    ctx.ui.notify("Quota strategy set to balanced.", "info");
+  if ((parts[0] === "balanced" || parts[0] === "quality") && parts.length === 1) {
+    await writeJsonAtomically(STRATEGY_PATH, { version: 1, mode: parts[0], updatedAt: Date.now() });
+    ctx.ui.notify(`Quota strategy set to ${parts[0]}.`, "info");
     return;
   }
 
@@ -740,7 +746,7 @@ async function configureStrategy(args: string, ctx: StrategyCommandContext, pi: 
     return;
   }
 
-  ctx.ui.notify("Usage: /quota-strategy balanced | targeted [provider]", "warning");
+  ctx.ui.notify("Usage: /quota-strategy balanced | quality | targeted [provider]", "warning");
 }
 
 async function readSnapshot(): Promise<UsageSnapshot | undefined> {
@@ -811,15 +817,20 @@ function sharedUsage(pi: PiApi): Promise<UsageSnapshot | undefined> {
 export default function usageAwareRouting(pi: PiApi) {
   pi.setLabel("Usage-aware subagent routing");
   pi.registerCommand("quota-strategy", {
-    description: "Show or change balanced/targeted subagent quota routing",
+    description: "Show or change balanced/quality/targeted subagent quota routing",
     getArgumentCompletions: argumentPrefix => completeQuotaStrategy(argumentPrefix),
     handler: (args, ctx) => configureStrategy(args, ctx, pi),
   });
   pi.on("before_agent_start", async (event, ctx) => {
     if (!pi.getActiveTools().includes("task")) return;
+    const strategy = await readStrategy();
+    if (strategy.mode === "quality") {
+      return {
+        systemPrompt: [...event.systemPrompt.filter(part => !part.startsWith(ROUTING_HEADER)), QUALITY_INSTRUCTION],
+      };
+    }
     const snapshot = await sharedUsage(pi);
     if (!snapshot?.windows.length) return;
-    const strategy = await readStrategy();
     const now = Date.now();
     const quotaScopeOrder = buildQuotaScopeOrder(snapshot, now, strategy);
     const agents = await discoverAgentRoutes(ctx.cwd, pi.logger);
@@ -833,9 +844,10 @@ export default function usageAwareRouting(pi: PiApi) {
   });
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "task") return;
+    const strategy = await readStrategy();
+    if (strategy.mode !== "targeted") return;
     const snapshot = await sharedUsage(pi);
     if (!snapshot?.windows.length) return;
-    const strategy = await readStrategy();
     const agents = await discoverAgentRoutes(ctx.cwd, pi.logger);
     const reason = quotaStrategyViolation(
       snapshot,

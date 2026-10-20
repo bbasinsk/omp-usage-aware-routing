@@ -98,7 +98,7 @@ describe("usage-aware routing", () => {
     }, NOW);
 
     expect(completeQuotaStrategy("", snapshot)?.map(item => item.value))
-      .toEqual(["balanced", "targeted"]);
+      .toEqual(["balanced", "quality", "targeted"]);
     expect(completeQuotaStrategy("bal", snapshot)?.map(item => item.value))
       .toEqual(["balanced"]);
     expect(completeQuotaStrategy("targeted ", snapshot)?.map(item => item.value))
